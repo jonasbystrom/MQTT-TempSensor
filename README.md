@@ -1,4 +1,4 @@
-# MQTT_TempSensor
+# MQTT TempSensor
 Temperature sensor (SHT30) running on a D1 Mini Pro V2.0.0 (esp82666) publishing sensor data to local MQTT broker (mosquitto).
 - Publishing sensor data regularly to MQTT Broker
 - Providig a web server to read sensor data thru a web browser.
