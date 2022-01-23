@@ -1,6 +1,7 @@
-# WiFi_MQTT_Reconnect
-ESP8266 example code for a working WiFi and MQTT strategy.
+# MQTT_TempSensor
+Tempsensor (SHT30) running D1 Mini Pro V2.0.0 (esp82666) publishing sensor data to local MQTT broker (mosquitto).
+- Publishing sensro data regularlty to MQTT Broker
+- Providig a web server to read sensor data thru a web browser.
 
-A demonstration code with a strategy to connect and reconnect to WiFi and MQTT. This version will restart ESP if can't connect to either WiFi or MQTT after a certain time or retries. Useable in cases when a MQTT connection is required and no off-line mode is needed.
-
-Principles are; connect and re-connect on connection losses. If (re-)connections can't succeed, restart the ESP.
+This version does not use ESP-Now or Deep Sleep. It is instead a more standard version running stable on USB 5V.
+It is fully possible to run this in Deep Sleep and roughly run ca 2 months on a standard battery. 
