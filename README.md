@@ -16,5 +16,6 @@ Temperature sensor (SHT30) running on a D1 Mini Pro V2.0.0 (esp82666) publishing
 
 This temp sensor does not use ESP-Now (see other repositiory for such functionality) but instead send sensor data to a (local) MQTT Broker over WiFi. It is tested with Mosquitto MQTT Broker on a local Raspberry PI connected to the same LAN on Ethernet.
 
-Code is designed for Arduino IDE and assumes ESP8266 MCU. For ESP32, wifi libraries and methods have to be updated accordingly. 
-Note. For Arduino IDE, you must store the skecth code in different folders to comply with the Arduino rule "folder and sketch must have same name".
+Code is designed for Arduino IDE and assumes ESP8266 MCU. For ESP32, wifi libraries and methods have to be updated accordingly.
+
+_Note. For Arduino IDE, you must store the skecth code in different folders to comply with the Arduino rule "folder and sketch must have same name"._
