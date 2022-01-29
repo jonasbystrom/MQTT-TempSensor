@@ -1,6 +1,5 @@
-
-#define SKETCH_NAME     "MQTT TempSensor"
-#define SKETCH_VERSION  "2022-01-23"
+#define SKETCH_PRODUCT  "MQTT TempSensor Deep Sleep"
+#define SKETCH_VERSION  "2022-01-29"
 #define SKETCH_ABOUT    "Publish Temp and Hum to MQTT"
 #define SKETCH_FILE     __FILE__
 
@@ -24,7 +23,7 @@
 //  HISTORY:
 //  2022-01-18  First version
 //  2022-01-19  Additions
-//  2022-01-23  Cleaning up ... (New Arduino IDE 2.0 Beta used. Required to update ESP8266 board from ver 2.5 to 2.7.1 (!))
+//  2022-01-29  Cleaning up ... (New Arduino IDE 2.0 Beta used. Required to update ESP8266 board from ver 2.5 to 2.7.1 (!))
 //
 //  AUTHOR:
 //  Jonas Byström, https://github.com/jonasbystrom
@@ -74,8 +73,7 @@ const char *mqtt_broker               = "raspberrypi";  //"192.168.1.165";
 const int mqtt_port                   = 1883;
 const char *mqtt_username             = "";
 const char *mqtt_password             = "";
-//const char *mqtt_client               = "";   // maybe we should set a mac adress here?
-#define mqtt_client                     ""      // maybe we should set a mac adress here?
+char mqtt_client[40];                                   // will be set to  mac addr
 
 int  mqttPublishCount                 = 0;
 int  mqttConnectTries                 = 0;
@@ -86,13 +84,14 @@ int  wifiConnectCount                 = 0;
 
 
 // -----------------------------------------------------------------------------------
-// Set TOPIC of THIS device
-// Define the PRODUCT and a unique UNIT no
-// The device is the topic identifier in MQTT
+// Set UNIT for each sample to make them unique
+// The DEVICE is the (resulting) topic identifier in MQTT
+// NAME is just a friendly name to easier recognize the unit is MQTT lists etc
 // -----------------------------------------------------------------------------------
 #define product                       "MQTT-Tempsensor"
 #define unit                          "1"
 #define device                        product "/" unit "/"     // "MQTT-Tempsensor/1/"
+#define name                          "Lilla Stugan"
 // -----------------------------------------------------------------------------------
 
 
@@ -102,8 +101,8 @@ const char *topic_temp                = device "temp";
 const char *topic_hum                 = device "hum";
 const char *topic_vbat                = device "vbat";
 // Meta
-const char *topic_client_id           = device mqtt_client;    // should be  ...-<mac> (?)
 const char *topic_name                = device "name";
+const char *topic_product             = device "product";
 const char *topic_version             = device "version";
 const char *topic_file                = device "file";
 const char *topic_compiled            = device "compiled";
@@ -159,29 +158,29 @@ void setup()
   pinMode(LED_BUILTIN, OUTPUT);           // Initialize the LED_BUILTIN pin as an output
   digitalWrite (LED_BUILTIN, !HIGH);      // Led ON
 
-  WiFi.mode(WIFI_STA); // explicitly set mode, esp defaults to STA+AP
+  WiFi.mode(WIFI_STA);                    // explicitly set mode, esp defaults to STA+AP
   
-  // Set software serial baud to 115200;
   Serial.begin(115200);
   while (!Serial){}
-  delay(1000);                             // D1 Mini sometimes need this extra delay ...
+  delay(1000);                            // D1 Mini sometimes need this extra delay ...
   Serial.println("\n");
   Serial.println("=====================================");
-  Serial.println(SKETCH_NAME);
+  Serial.println(SKETCH_PRODUCT);
   Serial.println(SKETCH_VERSION);
   Serial.println(SKETCH_ABOUT);
   Serial.println("=====================================");
   Serial.println("");
+  Serial.println(String(name));
   Serial.println("Device: "+String(device));
   Serial.flush();
 
-#ifdef EXCLUDE
+#ifdef EXCLUDE      
   //------------------------------------------------------------------
   //WiFiManager, Local intialization. Once its business is done, there is no need to keep it around
   WiFiManager wm;
 
-  //reset settings - wipe credentials for testing
-  wm.resetSettings();
+  // reset settings - wipe credentials for testing
+  // wm.resetSettings();
 
   // Automatically connect using saved credentials,
   // if connection fails, it starts an access point with the specified name ( "AutoConnectAP"),
@@ -228,7 +227,7 @@ void setup()
   
   // Initialize NTP --------------------------------
   Serial.print("Initializing NTP ... ");
-  configTime(MY_TZ, MY_NTP_SERVER); // --> Here is the IMPORTANT ONE LINER needed in your sketch!
+  configTime(MY_TZ, MY_NTP_SERVER); 
   // by default, the NTP will be started after 60 secs
   Serial.println(" OK");
 
@@ -258,39 +257,42 @@ void setup()
 void loop()
 // -----------------------------------------------------------------------------------
 {
-  timer.tick();
+  timer.tick();                                 // poll task timer
 
-  if (!client.connected()) {
+  if (!client.connected()) {                    // if not connected to mqtt broker ...
     long now = millis();
-    if (now - lastReconnectAttempt > 5000) {
+    if (now - lastReconnectAttempt > 5000) {    // wait 5 secs between tries
       lastReconnectAttempt = now;
       mqttConnectTries++;
       // Attempt to reconnect
-      if (mqttReconnect()) {
+      if (mqttReconnect()) {                    // try to reconnect
         lastReconnectAttempt = 0;
         mqttConnectCount++;
       }
     }
   } else {
     // MQTT Client connected
-    client.loop();
+    client.loop();                              // mqtt poll
   }
 
-  server.handleClient();                // Web server poll
+  server.handleClient();                        // web server poll
   MDNS.update();
 
-  ArduinoOTA.handle();                  // Allow OTA updates     
+  ArduinoOTA.handle();                          // OTA handling poll     
 }
 
 
 // -----------------------------------------------------------------------------------
-boolean mqttReconnect() {
-int res;
-  res = client.connect(mqtt_client, mqtt_username, mqtt_password);
+boolean mqttReconnect() 
+{
+  strcpy (mqtt_client, WiFi.macAddress().c_str());      // set client ID to MAC addr, to ensure unique at Broker
+  int res = client.connect(mqtt_client, mqtt_username, mqtt_password);
   if (res) {
-    // do all subscribes here ...
-    // ...
-    // client.subscribe(topic_outdoor_temp);    
+    // subscribe to all/any wanted topics here ...
+    // you should re-subscribe after each new (re-)connection
+    // client.subscribe(topic_whatever_a);        
+    // client.subscribe(topic_whatever_b);
+    // client.subscribe(topic_...);        
   }
   return client.connected();
 }
@@ -300,15 +302,12 @@ int res;
 bool readAndPublishData (void *)
 // -----------------------------------------------------------------------------------
 { 
-  pinMode(LED_BUILTIN, OUTPUT);           // Initialize the LED_BUILTIN pin as an output
   digitalWrite (LED_BUILTIN, !HIGH);      // Led ON
   
   readSensorData();
   publishData();
 
-  Serial.println("At end of readAndPublishData");
   digitalWrite (LED_BUILTIN, !LOW);      // Led OFF
-  
 }
 
 
@@ -323,6 +322,7 @@ void readSensorData()
   } else {
     Serial.println("*** Error reading temp sensor! : ");
   }
+  // read battery level (BAT-A0 pad on MCU board must be shorted(=soldered) to connect bat level to A0.)
   Vbat = 4.5*analogRead(A0)/1023.0;  
 }
 
@@ -347,8 +347,11 @@ void publishData ()
   client.publish(topic_vbat, str, true);  
   Serial.print (topic_vbat); Serial.print  (":       "); Serial.print (Vbat); Serial.println("V");  
   
-  client.publish(topic_name, SKETCH_NAME);  
-  Serial.print  (topic_name); Serial.print (":       "); Serial.println (SKETCH_NAME); 
+  client.publish(topic_name, name);  
+  Serial.print  (topic_name); Serial.print (":       "); Serial.println (name); 
+
+  client.publish(topic_product, SKETCH_PRODUCT);  
+  Serial.print  (topic_product); Serial.print (":       "); Serial.println (SKETCH_PRODUCT); 
   
   client.publish(topic_version, SKETCH_VERSION);  
   Serial.print  (topic_version); Serial.print (":    "); Serial.println (SKETCH_VERSION); 
@@ -396,8 +399,6 @@ void publishData ()
   sprintf (str, "%d", mqttPublishCount);
   client.publish(topic_mqtt_publish_count, str);  
   Serial.print(topic_mqtt_publish_count); Serial.print(": "); Serial.println(str);  
-
-  Serial.println("At end of PublishData");
 }
 
 
@@ -458,27 +459,28 @@ void handleRoot()
   s += "</head>";
   s += "<body><h1>" + String(device) + "</h1>";
   s += "<table class=center id=topics>";
-  s += "<tr><th> <b>Topic</b>  </th> <th> Value                                          </th></tr>";  
-  s += "<tr><td> <b>Name</b>   </td> <td> " + String(SKETCH_NAME) +                     "</td></tr>";
-  s += "<tr><td> <b>Date</b>   </td> <td> " + String(SKETCH_VERSION) +                  "</td></tr>";
-  s += "<tr><td> <b>About</b>  </td> <td> " + String(SKETCH_ABOUT) +                    "</td></tr>";
-  s += "<tr><td> <b>Host</b>   </td> <td> " + String(device) +                          "</td></tr>";
-  s += "<tr><td> File          </td> <td> " + String(__FILE__) +                        "</td></tr>";
-  s += "<tr><td> Compiled      </td> <td> " + String(__DATE__)  +                       "</td></tr>";
-  s += "<tr><td> Started       </td> <td> " + String( startedTime )  +                  "</td></tr>";
-  s += "<tr><td> Now           </td> <td> " + dateString() + ", " + timeString() +      "</td></tr>";
-  s += "<tr><td> Wifi Network  </td> <td> " + String(WiFi.SSID())  +                    "</td></tr>";
-  s += "<tr><td> Signal level  </td> <td> " + String(WiFi.RSSI()) + " dBm"  +           "</td></tr>";
-  s += "<tr><td> IP address    </td> <td> " + WiFi.localIP().toString()  +              "</td></tr>";
-  s += "<tr><td> OTA           </td> <td> " + String("OTA IDE enabled:")+String(device)+"</td></tr>"; 
-  s += "<tr><td> <b>Temp</b>   </td> <td> <b>" + String( sht30_temp, 1 ) + " &deg;C </b> </td></tr>";
-  s += "<tr><td> <b>Hum</b>    </td> <td> <b>" + String( sht30_humidity, 1 ) + " %  </b> </td></tr>";
-  s += "<tr><td> <b>Vbat</b>   </td> <td> <b>" + String( Vbat ) + " V </b>               </td></tr>";
-  s += "<tr><td> <u>MQTT</u>   </td> <td>                                                </td></tr>";
-  s += "<tr><td> Connect Count </td> <td> " + String (mqttConnectCount)  +              "</td></tr>";
-  s += "<tr><td> Connect Tries </td> <td> " + String (mqttConnectTries)  +              "</td></tr>";
-  s += "<tr><td> Publish Count </td> <td> " + String (mqttPublishCount)  +              "</td></tr>";
-  s += "<tr><td>               </td> <td>                                                </td></tr>";
+  s += "<tr><th> <b>Topic</b>   </th> <th> Value                                             </th></tr>";  
+  s += "<tr><td> <b>Name</b>    </td> <td>    " + String(name) +                            "</td></tr>";
+  s += "<tr><td> <b>Temp</b>    </td> <td> <b>" + String( sht30_temp, 1 ) + " &deg;C </b>    </td></tr>";
+  s += "<tr><td> <b>Hum</b>     </td> <td> <b>" + String( sht30_humidity, 1 ) + " %  </b>    </td></tr>";
+  s += "<tr><td> <b>Vbat</b>    </td> <td> <b>" + String( Vbat ) + " V </b>                  </td></tr>";
+  s += "<tr><td> <b>Product</b> </td> <td>    " + String(SKETCH_PRODUCT) +                  "</td></tr>";
+  s += "<tr><td> <b>Date</b>    </td> <td>    " + String(SKETCH_VERSION) +                  "</td></tr>";
+  s += "<tr><td> <b>About</b>   </td> <td>    " + String(SKETCH_ABOUT) +                    "</td></tr>";
+  s += "<tr><td> <b>Device</b>  </td> <td>    " + String(device) +                          "</td></tr>";
+  s += "<tr><td> File           </td> <td>    " + String(__FILE__) +                        "</td></tr>";
+  s += "<tr><td> Compiled       </td> <td>    " + String(__DATE__)  +                       "</td></tr>";
+  s += "<tr><td> Started        </td> <td>    " + String( startedTime )  +                  "</td></tr>";
+  s += "<tr><td> Now            </td> <td>    " + dateString() + ", " + timeString() +      "</td></tr>";
+  s += "<tr><td> Wifi Network   </td> <td>    " + String(WiFi.SSID())  +                    "</td></tr>";
+  s += "<tr><td> Signal level   </td> <td>    " + String(WiFi.RSSI()) + " dBm"  +           "</td></tr>";
+  s += "<tr><td> IP address     </td> <td>    " + WiFi.localIP().toString()  +              "</td></tr>";
+  s += "<tr><td> OTA            </td> <td>    " + String("OTA IDE enabled:")+String(device)+"</td></tr>"; 
+  s += "<tr><td> <u>MQTT</u>    </td> <td>                                                   </td></tr>";
+  s += "<tr><td> Connect Count  </td> <td>    " + String (mqttConnectCount)  +              "</td></tr>";
+  s += "<tr><td> Connect Tries  </td> <td>    " + String (mqttConnectTries)  +              "</td></tr>";
+  s += "<tr><td> Publish Count  </td> <td>    " + String (mqttPublishCount)  +              "</td></tr>";
+  s += "<tr><td>                </td> <td>                                                   </td></tr>";
   s += "</table></boby></html>";
   
   server.send(200, "text/html", s);
@@ -504,17 +506,6 @@ String dateString()
   char buf[80];
   strftime (buf, 80, "%Y-%m-%d", &tm);      // can also use shorter: "%F"
   return String(buf);
-/*  
-  String yearStr = String(tm.tm_year+1900);
-
-  uint8_t month = tm.tm_mon + 1;
-  String monthStr = month < 10 ? "0" + String(month) : String(month);
-
-  uint8_t day = tm.tm_mday;
-  String dayStr = day < 10 ? "0" + String(day) : String(day);
-
-  return yearStr + "-" + monthStr + "-" + dayStr;
-*/
 }
 
 // -----------------------------------------------------------------------------------
@@ -528,16 +519,5 @@ String timeString()
   char buf[80];
   strftime (buf, 80, "%H:%M:%S", &tm);
   return String(buf);
-/*  
-  uint8_t hour = tm.tm_hour;;
-  String hourStr = hour < 10 ? "0" + String(hour) : String(hour);
-
-  uint8_t min = tm.tm_min;
-  String minStr = min < 10 ? "0" + String(min) : String(min);
-
-  uint8_t sec = tm.tm_sec;
-  String secStr = sec < 10 ? "0" + String(sec) : String(sec);
-
-  return hourStr + ":" + minStr + ":" + secStr;
-*/
 }  
+
