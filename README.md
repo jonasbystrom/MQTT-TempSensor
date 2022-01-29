@@ -5,7 +5,7 @@ Temperature sensor (SHT30) running on a D1 Mini Pro V2.0.0 (esp82666) publishing
 - 5V USB version.
 - Publishing sensor data regularly (every 1 min) to MQTT Broker
 - Providig a web server to read sensor data thru a web browser.
-- Supports OTA to downaload new sketch over Wifi from Arduino IDE
+- Supports OTA to download new sketch over Wifi from Arduino IDE
 
 ## MQTT-TempSensor-DeepSleep:
 - Battery version.
