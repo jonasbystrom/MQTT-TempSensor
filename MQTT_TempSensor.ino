@@ -1,4 +1,5 @@
-#define SKETCH_PRODUCT  "MQTT TempSensor Deep Sleep"
+
+#define SKETCH_PRODUCT  "MQTT TempSensor"
 #define SKETCH_VERSION  "2022-01-29"
 #define SKETCH_ABOUT    "Publish Temp and Hum to MQTT"
 #define SKETCH_FILE     __FILE__
@@ -84,14 +85,17 @@ int  wifiConnectCount                 = 0;
 
 
 // -----------------------------------------------------------------------------------
+// MQTT Topics
 // Set UNIT for each sample to make them unique
 // The DEVICE is the (resulting) topic identifier in MQTT
 // NAME is just a friendly name to easier recognize the unit is MQTT lists etc
 // -----------------------------------------------------------------------------------
-#define product                       "MQTT-Tempsensor"
-#define unit                          "1"
-#define device                        product "/" unit "/"     // "MQTT-Tempsensor/1/"
-#define name                          "Lilla Stugan"
+#ifndef device
+  #define product                       "MQTT-Tempsensor"
+  #define unit                          "1"
+  #define device                        product "/" unit "/"    // "MQTT-Tempsensor/1/"
+  #define name                          "Bedroom"               // set any "friendly name" of your choice
+#endif
 // -----------------------------------------------------------------------------------
 
 
@@ -245,7 +249,10 @@ void setup()
   ArduinoOTA.setHostname (device);
   ArduinoOTA.begin();
   
-  delay(5000);
+  //delay(5000);
+  do {                        // wait until we have time - potentially blocking
+    time (&now);
+  } while (now > 1000); 
   startedTime = dateString() + ", " + timeString();  
   Serial.println("Started: " + startedTime);
   
@@ -520,4 +527,3 @@ String timeString()
   strftime (buf, 80, "%H:%M:%S", &tm);
   return String(buf);
 }  
-
