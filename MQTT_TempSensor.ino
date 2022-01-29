@@ -249,10 +249,10 @@ void setup()
   ArduinoOTA.setHostname (device);
   ArduinoOTA.begin();
   
-  //delay(5000);
-  do {                        // wait until we have time - potentially blocking
-    time (&now);
-  } while (now > 1000); 
+  do {                              // wait until we have time - potentially blocking
+    time(&now);
+    delay(1000);
+  } while (now < 1000);
   startedTime = dateString() + ", " + timeString();  
   Serial.println("Started: " + startedTime);
   
