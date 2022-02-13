@@ -1,6 +1,6 @@
 
 #define SKETCH_PRODUCT  "MQTT TempSensor"
-#define SKETCH_VERSION  "2022-01-29"
+#define SKETCH_VERSION  "2022-02-13"
 #define SKETCH_ABOUT    "Publish Temp and Hum to MQTT"
 #define SKETCH_FILE     __FILE__
 
@@ -25,6 +25,9 @@
 //  2022-01-18  First version
 //  2022-01-19  Additions
 //  2022-01-29  Cleaning up ... (New Arduino IDE 2.0 Beta used. Required to update ESP8266 board from ver 2.5 to 2.7.1 (!))
+//  2022-01-30  Reorganizing wifi reconnect
+//  2022-02-02  Updated WiFi reconnect procedure
+//  2022-02-13  Smaller updates
 //
 //  AUTHOR:
 //  Jonas Byström, https://github.com/jonasbystrom
@@ -91,10 +94,12 @@ int  wifiConnectCount                 = 0;
 // NAME is just a friendly name to easier recognize the unit is MQTT lists etc
 // -----------------------------------------------------------------------------------
 #ifndef device
+                                        // User settings. Make device (product+unit) unique for each sensor device
   #define product                       "MQTT-Tempsensor"
   #define unit                          "1"
-  #define device                        product "/" unit "/"    // "MQTT-Tempsensor/1/"
-  #define name                          "Bedroom"               // set any "friendly name" of your choice
+  #define myname                        "Bedroom"               // set any "friendly name" of your choice
+
+  #define device                        product "/" unit "/"    // => "MQTT-Tempsensor/1/"
 #endif
 // -----------------------------------------------------------------------------------
 
@@ -104,6 +109,7 @@ int  wifiConnectCount                 = 0;
 const char *topic_temp                = device "temp";
 const char *topic_hum                 = device "hum";
 const char *topic_vbat                = device "vbat";
+const char *topic_time                = device "time";
 // Meta
 const char *topic_name                = device "name";
 const char *topic_product             = device "product";
@@ -116,11 +122,11 @@ const char *topic_mac                 = device "mac";
 const char *topic_ssid                = device "ssid";
 const char *topic_rssi                = device "rssi";
 const char *topic_wifi_connect_count  = device "wifi_connect_count";
+const char *topic_wifi_connect_tries  = device "wifi_connect_tries";
 const char *topic_mqtt_connect_count  = device "mqtt_connect_count";
 const char *topic_mqtt_connect_tries  = device "mqtt_connect_tries";
 const char *topic_mqtt_publish_count  = device "mqtt_publish_count";
 const char *topic_uptime              = device "uptime";
-const char *topic_time                = device "time";
 
 
 // -----------------------------------------------------------------------------------
@@ -153,6 +159,7 @@ long lastReconnectAttempt = 0;
 float sht30_temp          = NAN;
 float sht30_humidity      = NAN;
 float Vbat                = NAN;
+String readTime           = "";           // Time stamp of sensor reading
 
 
 // -----------------------------------------------------------------------------------
@@ -174,7 +181,7 @@ void setup()
   Serial.println(SKETCH_ABOUT);
   Serial.println("=====================================");
   Serial.println("");
-  Serial.println(String(name));
+  Serial.println(String(myname));
   Serial.println("Device: "+String(device));
   Serial.flush();
 
@@ -207,13 +214,89 @@ void setup()
   //------------------------------------------------------------------
 #endif
 
+  // connect to wifi, start mDNS, web server and MQTT server ,
+  wifiConnect();
+
+  // Tasks -----------------------------------------
+  #define SECS 1000
+  timer.every( 1*60 * SECS,   readAndPublishData);         // every 1 mins
+
+  // OTA -------------------------------------------
+  ArduinoOTA.setHostname (device);
+  ArduinoOTA.begin();
+  
+  // Get time --------------------------------------
+  Serial.print("Getting time ");
+  while (time(nullptr) < 100000ul)    // wait until we have time - potentially blocking
+  {
+    Serial.print(".");
+    delay(1000);
+  }
+  Serial.println(" OK");
+  // do {                              // wait until we have time - potentially blocking
+  //   time(&now);
+  //   delay(1000);
+  // } while (now < 1000);
+  startedTime = dateString() + ", " + timeString();  
+  Serial.println("Started: " + startedTime);
+  
+  digitalWrite (LED_BUILTIN, !LOW);      // Led OFF
+
+  // make an initial sensor reading ----------------- 
+  void *dummy;
+  readAndPublishData(dummy);
+}
+
+
+// -----------------------------------------------------------------------------------
+void loop()
+// -----------------------------------------------------------------------------------
+{
+  timer.tick();                                 // task timer poll
+
+  if (WiFi.status() != WL_CONNECTED) {          // if lost wifi - reconnect
+    wifiConnect();
+    client.disconnect();      // ... try to force a disconnect to run the below reconnection code ...
+  }
+  if (!client.connected()) {                    // if not connected to mqtt broker ...
+    long now = millis();
+    if (now - lastReconnectAttempt > 5000) {    //   wait 5 secs between tries
+      lastReconnectAttempt = now;
+      mqttConnectTries++;
+      // Attempt to reconnect
+      if (mqttReconnect()) {                    //   try to reconnect
+        lastReconnectAttempt = 0;
+        mqttConnectCount++;
+      }
+    }
+  } else {
+    // MQTT Client connected
+    client.loop();                              // mqtt poll
+  }
+
+  server.handleClient();                        // web server poll
+  MDNS.update();
+
+  ArduinoOTA.handle();                          // OTA handling poll     
+}
+
+
+// -----------------------------------------------------------------------------------
+bool wifiConnect() 
+{
+  wifiConnectTries = 0;
   // connecting to a WiFi network ------------------
+  WiFi.disconnect();
+  WiFi.mode(WIFI_STA);
   WiFi.begin(ssid, password);
   Serial.print("Connecting to WiFi ");
   while (WiFi.status() != WL_CONNECTED) {
       delay(500);
       Serial.print(".");
+      wifiConnectTries ++;
+      if (wifiConnectTries > 60) { ESP.restart(); }
   }
+  wifiConnectCount++;
   Serial.println(" OK");
   Serial.print("Connected to: ");
   Serial.print(WiFi.SSID() + ", IP: ");
@@ -222,6 +305,8 @@ void setup()
   // Web server init -------------------------------
   if (MDNS.begin(device)) {
     Serial.println("MDNS responder started");
+  } else {
+    Serial.println("*** ERROR: MDNS responder NOT started");   
   }
   Serial.print("Starting HTTP server ... ");
   server.on("/", handleRoot);
@@ -239,55 +324,8 @@ void setup()
   Serial.print("Connecting to MQTT broker ...");  
   client.setServer(mqtt_broker, mqtt_port);
   client.setCallback(onMqttReceive);
-  Serial.println(" OK");  
-
-  // Tasks -----------------------------------------
-  #define SECS 1000
-  timer.every( 1*60 * SECS,   readAndPublishData);         // every 1 mins
-
-  // OTA -------------------------------------------
-  ArduinoOTA.setHostname (device);
-  ArduinoOTA.begin();
-  
-  do {                              // wait until we have time - potentially blocking
-    time(&now);
-    delay(1000);
-  } while (now < 1000);
-  startedTime = dateString() + ", " + timeString();  
-  Serial.println("Started: " + startedTime);
-  
-  digitalWrite (LED_BUILTIN, !LOW);      // Led OFF
+  Serial.println(" OK");    
 }
-
-
-// -----------------------------------------------------------------------------------
-void loop()
-// -----------------------------------------------------------------------------------
-{
-  timer.tick();                                 // poll task timer
-
-  if (!client.connected()) {                    // if not connected to mqtt broker ...
-    long now = millis();
-    if (now - lastReconnectAttempt > 5000) {    // wait 5 secs between tries
-      lastReconnectAttempt = now;
-      mqttConnectTries++;
-      // Attempt to reconnect
-      if (mqttReconnect()) {                    // try to reconnect
-        lastReconnectAttempt = 0;
-        mqttConnectCount++;
-      }
-    }
-  } else {
-    // MQTT Client connected
-    client.loop();                              // mqtt poll
-  }
-
-  server.handleClient();                        // web server poll
-  MDNS.update();
-
-  ArduinoOTA.handle();                          // OTA handling poll     
-}
-
 
 // -----------------------------------------------------------------------------------
 boolean mqttReconnect() 
@@ -315,6 +353,8 @@ bool readAndPublishData (void *)
   publishData();
 
   digitalWrite (LED_BUILTIN, !LOW);      // Led OFF
+
+  return true;
 }
 
 
@@ -322,15 +362,21 @@ bool readAndPublishData (void *)
 // -----------------------------------------------------------------------------------
 void readSensorData()
 { 
+  sht30_temp      = NAN;
+  sht30_humidity  = NAN;
+  Vbat            = NAN;
+
   if (sht30.get() == 0) {
     // read temp sensor
     sht30_temp = sht30.cTemp;
     sht30_humidity = sht30.humidity;    
   } else {
-    Serial.println("*** Error reading temp sensor! : ");
+    Serial.println("\n*** Error reading temp sensor!");
   }
   // read battery level (BAT-A0 pad on MCU board must be shorted(=soldered) to connect bat level to A0.)
   Vbat = 4.5*analogRead(A0)/1023.0;  
+
+  readTime = timeString();            // time stamp the readings
 }
 
 
@@ -342,6 +388,9 @@ void publishData ()
 
   Serial.println ("\nPublishing data to MQTT broker:");  
 
+  // here we could chk for NAN and not send, or just send also NAN .... try what is best.
+
+  // Sensor data
   sprintf (str, "%.1f", sht30_temp); 
   client.publish(topic_temp, str, true);  
   Serial.print (topic_temp); Serial.print (":       "); Serial.print (sht30_temp);  Serial.println("°C");
@@ -354,8 +403,13 @@ void publishData ()
   client.publish(topic_vbat, str, true);  
   Serial.print (topic_vbat); Serial.print  (":       "); Serial.print (Vbat); Serial.println("V");  
   
-  client.publish(topic_name, name);  
-  Serial.print  (topic_name); Serial.print (":       "); Serial.println (name); 
+  strcpy (str, readTime.c_str());
+  client.publish(topic_time, str, true);  
+  Serial.print(topic_time); Serial.print(":       "); Serial.println(str);  
+
+  // Meta data
+  client.publish(topic_name, myname);  
+  Serial.print  (topic_name); Serial.print (":       "); Serial.println (myname); 
 
   client.publish(topic_product, SKETCH_PRODUCT);  
   Serial.print  (topic_product); Serial.print (":       "); Serial.println (SKETCH_PRODUCT); 
@@ -389,10 +443,6 @@ void publishData ()
 
   client.publish(topic_mac, WiFi.macAddress().c_str());  
   Serial.print (topic_mac); Serial.print (":        "); Serial.println (WiFi.macAddress().c_str()); 
-
-  strcpy (str, timeString().c_str());
-  client.publish(topic_time, str);  
-  Serial.print(topic_time); Serial.print(":       "); Serial.println(str);  
   
   sprintf (str, "%d", mqttConnectCount);
   client.publish(topic_mqtt_connect_count, str);  
@@ -406,6 +456,14 @@ void publishData ()
   sprintf (str, "%d", mqttPublishCount);
   client.publish(topic_mqtt_publish_count, str);  
   Serial.print(topic_mqtt_publish_count); Serial.print(": "); Serial.println(str);  
+
+  sprintf (str, "%d", wifiConnectCount);
+  client.publish(topic_wifi_connect_count, str);  
+  Serial.print(topic_wifi_connect_count); Serial.print(": "); Serial.println(str);  
+
+  sprintf (str, "%d", wifiConnectTries);
+  client.publish(topic_wifi_connect_tries, str);  
+  Serial.print(topic_wifi_connect_tries); Serial.print(": "); Serial.println(str);  
 }
 
 
@@ -423,6 +481,7 @@ void onMqttReceive(char *topic, byte *payload, unsigned int length) {
 }
 
 
+// Print data table in styled HTML (for browser)
 // -----------------------------------------------------------------------------------
 void handleRoot() 
 // -----------------------------------------------------------------------------------
@@ -467,27 +526,32 @@ void handleRoot()
   s += "<body><h1>" + String(device) + "</h1>";
   s += "<table class=center id=topics>";
   s += "<tr><th> <b>Topic</b>   </th> <th> Value                                             </th></tr>";  
-  s += "<tr><td> <b>Name</b>    </td> <td>    " + String(name) +                            "</td></tr>";
+  s += "<tr><td> <b>Name</b>    </td> <td>    " + String(myname) +                          "</td></tr>";
   s += "<tr><td> <b>Temp</b>    </td> <td> <b>" + String( sht30_temp, 1 ) + " &deg;C </b>    </td></tr>";
   s += "<tr><td> <b>Hum</b>     </td> <td> <b>" + String( sht30_humidity, 1 ) + " %  </b>    </td></tr>";
   s += "<tr><td> <b>Vbat</b>    </td> <td> <b>" + String( Vbat ) + " V </b>                  </td></tr>";
+  s += "<tr><td> <b>Time</b>    </td> <td>    " + readTime + "                               </td></tr>";
   s += "<tr><td> <b>Product</b> </td> <td>    " + String(SKETCH_PRODUCT) +                  "</td></tr>";
-  s += "<tr><td> <b>Date</b>    </td> <td>    " + String(SKETCH_VERSION) +                  "</td></tr>";
+  s += "<tr><td> <b>Version</b> </td> <td>    " + String(SKETCH_VERSION) +                  "</td></tr>";
   s += "<tr><td> <b>About</b>   </td> <td>    " + String(SKETCH_ABOUT) +                    "</td></tr>";
   s += "<tr><td> <b>Device</b>  </td> <td>    " + String(device) +                          "</td></tr>";
   s += "<tr><td> File           </td> <td>    " + String(__FILE__) +                        "</td></tr>";
   s += "<tr><td> Compiled       </td> <td>    " + String(__DATE__)  +                       "</td></tr>";
   s += "<tr><td> Started        </td> <td>    " + String( startedTime )  +                  "</td></tr>";
   s += "<tr><td> Now            </td> <td>    " + dateString() + ", " + timeString() +      "</td></tr>";
-  s += "<tr><td> Wifi Network   </td> <td>    " + String(WiFi.SSID())  +                    "</td></tr>";
-  s += "<tr><td> Signal level   </td> <td>    " + String(WiFi.RSSI()) + " dBm"  +           "</td></tr>";
-  s += "<tr><td> IP address     </td> <td>    " + WiFi.localIP().toString()  +              "</td></tr>";
-  s += "<tr><td> OTA            </td> <td>    " + String("OTA IDE enabled:")+String(device)+"</td></tr>"; 
   s += "<tr><td> <u>MQTT</u>    </td> <td>                                                   </td></tr>";
   s += "<tr><td> Connect Count  </td> <td>    " + String (mqttConnectCount)  +              "</td></tr>";
   s += "<tr><td> Connect Tries  </td> <td>    " + String (mqttConnectTries)  +              "</td></tr>";
   s += "<tr><td> Publish Count  </td> <td>    " + String (mqttPublishCount)  +              "</td></tr>";
-  s += "<tr><td>                </td> <td>                                                   </td></tr>";
+  s += "<tr><td> Broker IP      </td> <td>    " + String (mqtt_broker)  +                   "</td></tr>";
+  s += "<tr><td> Port           </td> <td>    " + String (mqtt_port)  +                     "</td></tr>";
+  s += "<tr><td> <u>WiFi</u>    </td> <td>                                                   </td></tr>";
+  s += "<tr><td> Connect Count  </td> <td>    " + String (wifiConnectCount)  +              "</td></tr>";
+  s += "<tr><td> Connect Tries  </td> <td>    " + String (wifiConnectTries)  +              "</td></tr>";
+  s += "<tr><td> Wifi Network   </td> <td>    " + String(WiFi.SSID())  +                    "</td></tr>";
+  s += "<tr><td> Signal level   </td> <td>    " + String(WiFi.RSSI()) + " dBm"  +           "</td></tr>";
+  s += "<tr><td> IP address     </td> <td>    " + WiFi.localIP().toString()  +              "</td></tr>";
+  s += "<tr><td> OTA            </td> <td>    " + String("OTA IDE enabled:")+String(device)+"</td></tr>"; 
   s += "</table></boby></html>";
   
   server.send(200, "text/html", s);
